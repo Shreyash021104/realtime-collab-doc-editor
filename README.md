@@ -1,5 +1,9 @@
 # Real-Time Collaborative Document Editor
 
+[![CI](https://github.com/Shreyash021104/realtime-collab-doc-editor/actions/workflows/ci.yml/badge.svg)](https://github.com/Shreyash021104/realtime-collab-doc-editor/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Live demo](https://img.shields.io/badge/demo-live-brightgreen)](https://client-six-iota-77.vercel.app)
+
 A Google Docs-style editor: multiple people open the same document, type at the same
 time, see each other's cursors live, and never lose a keystroke — even if two people
 edit the exact same spot at the exact same moment.
@@ -7,6 +11,20 @@ edit the exact same spot at the exact same moment.
 **Live demo:** https://client-six-iota-77.vercel.app (frontend, Vercel) talking to
 https://collab-doc-editor-server.onrender.com (backend, Render). Both on free tiers —
 see the caveats in [Deployment](#deployment) before judging cold-start latency.
+
+<p align="center">
+  <img src="docs/screenshots/editor-collab.png" alt="Two users editing the same document simultaneously, with a live named cursor and presence avatars" width="100%" />
+</p>
+
+<details>
+<summary>More screenshots (dashboard, share dialog)</summary>
+<br>
+
+| Dashboard | Share dialog |
+|---|---|
+| ![Documents dashboard](docs/screenshots/dashboard.png) | ![Share document dialog](docs/screenshots/share-dialog.png) |
+
+</details>
 
 ## The problem
 
@@ -261,3 +279,24 @@ repo's `main` branch.
 3. Deploy `client/` to Vercel (or any static host with SPA rewrite support). Set
    `VITE_API_URL` / `VITE_WS_URL` to the backend's `https://` / `wss://` URLs, and
    make sure the host rewrites unknown paths to `index.html`.
+
+## Contributing
+
+This is a personal portfolio project, and `main` is protected: changes land through
+pull requests, reviewed and merged by [@Shreyash021104](https://github.com/Shreyash021104)
+— nothing pushes to `main` directly, including from AI tooling. If you'd like to
+contribute:
+
+1. Fork the repo and branch off `main`.
+2. Open a PR describing what changed and why. CI (typecheck, build, and the
+   integration/browser tests described in [Verifying it yourself](#verifying-it-yourself))
+   must pass before it's reviewable.
+3. Expect review comments — this repo is used as a portfolio/interview reference, so
+   changes need to hold up to the same "why did you do it this way" scrutiny described
+   throughout this README.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for more detail.
+
+## License
+
+[MIT](LICENSE)

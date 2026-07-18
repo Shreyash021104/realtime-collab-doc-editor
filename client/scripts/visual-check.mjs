@@ -46,7 +46,6 @@ await shot(pageA, "02-empty-dashboard");
 // --- Client A: create a document, type into the editor ---
 await pageA.getByRole("button", { name: "+ New document" }).click();
 await pageA.waitForURL("**/documents/*");
-const docUrl = pageA.url();
 await pageA.locator(".ProseMirror").click();
 await pageA.keyboard.type("Hello from Alice. ");
 await shot(pageA, "03-alice-typed");
