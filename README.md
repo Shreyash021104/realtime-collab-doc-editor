@@ -4,8 +4,9 @@ A Google Docs-style editor: multiple people open the same document, type at the 
 time, see each other's cursors live, and never lose a keystroke — even if two people
 edit the exact same spot at the exact same moment.
 
-**Live demo:** _not yet deployed — see [Deployment](#deployment) for the intended
-Vercel + Railway/Fly.io setup._
+**Live demo:** https://client-six-iota-77.vercel.app (frontend, Vercel) talking to
+https://collab-doc-editor-server.onrender.com (backend, Render). Both on free tiers —
+see the caveats in [Deployment](#deployment) before judging cold-start latency.
 
 ## The problem
 
@@ -61,7 +62,7 @@ debounces a write of the full document state to Postgres.
 | Persistence | PostgreSQL (documents, permissions, share links, version snapshots) |
 | Ephemeral state | Redis (presence heartbeats) |
 | Auth | JWT, bcrypt password hashes |
-| Deployment target | Frontend → Vercel. Backend (needs persistent WS connections) → Railway/Fly.io |
+| Deployment | Frontend → Vercel. Backend (needs persistent WS connections, not serverless) → Render |
 
 ## The four hardest decisions
 
@@ -223,9 +224,40 @@ npm run dev             # http://localhost:5173
 
 ## Deployment
 
-- **Backend**: Railway or Fly.io (needs a long-lived process for WebSocket
-  connections — not a serverless function). Set `DATABASE_URL`, `REDIS_URL`,
-  `JWT_SECRET`, `CORS_ORIGIN` from `server/.env.example`. Run `npm run migrate` once
-  against the production database before first boot.
-- **Frontend**: Vercel. Set `VITE_API_URL` / `VITE_WS_URL` to the deployed backend's
-  `https://` / `wss://` URLs.
+**What's actually running:** backend on Render (free web service + free Postgres +
+free Key Value/Redis, Singapore region), frontend on Vercel. Both deployed from this
+repo's `main` branch.
+
+- **Backend (Render)**: a `web_service` with root directory `server`, build command
+  `npm ci && npm run build`, start command `npm start`, health check path `/health`.
+  `DATABASE_URL` / `REDIS_URL` point at Render's *internal* connection strings for the
+  Postgres and Key Value instances (same private network, no public exposure needed).
+  Fly.io was the original plan (see the tech stack table above) but it requires a
+  credit card on file even for free-tier resources; Render's free web service tier
+  doesn't, so that's what's actually live.
+- **Frontend (Vercel)**: `VITE_API_URL` / `VITE_WS_URL` point at the Render backend's
+  `https://` / `wss://` URLs. Needs a `vercel.json` rewrite (`/(.*) → /index.html`) —
+  without it, every client-side route except `/` 404s on refresh or direct link,
+  since Vercel's static file server has no idea `/documents/:id` isn't a real file.
+  Caught this by actually curling the deployed routes, not just the root path.
+
+**Known trade-offs of the free-tier deployment** (not code limitations, infra ones):
+- Render's free Postgres **expires 30 days after creation** and isn't recoverable
+  after that — fine for a demo, not for anything you'd want to keep data in long-term.
+- Render's free web service **spins down after 15 minutes idle**; the first request
+  after that takes ~30-50s to cold-start (the health check path exists partly to make
+  that visible rather than silent).
+- The Postgres instance's IP allow-list is currently open (`0.0.0.0/0`) to allow
+  running migrations from outside Render's network; access still requires the
+  database credentials, but on a real production deploy this would be narrowed to
+  Render's own egress ranges (or migrations run from *within* the network instead).
+
+**To deploy your own copy:**
+1. Provision a Postgres database and a Redis-compatible store (Render, Fly, Railway,
+   Neon + Upstash, whatever) and run `server/src/migrations/001_init.sql` against it.
+2. Deploy `server/` as a long-lived Node process (not a serverless function — it holds
+   persistent WebSocket connections). Set `DATABASE_URL`, `REDIS_URL`, `JWT_SECRET`,
+   `CORS_ORIGIN` from `server/.env.example`.
+3. Deploy `client/` to Vercel (or any static host with SPA rewrite support). Set
+   `VITE_API_URL` / `VITE_WS_URL` to the backend's `https://` / `wss://` URLs, and
+   make sure the host rewrites unknown paths to `index.html`.
