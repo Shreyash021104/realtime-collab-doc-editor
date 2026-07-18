@@ -1,0 +1,123 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: collab_docs
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/collab_docs
+      REDIS_URL: redis://localhost:6379
+      JWT_SECRET: ci-test-secret
+      CORS_ORIGIN: http://localhost:5173
+      PORT: 4000
+      VITE_API_URL: http://localhost:4000
+      VITE_WS_URL: ws://localhost:4000
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # --- Server: install, typecheck, build, migrate ---
+      - name: Install server dependencies
+        working-directory: server
+        run: npm ci
+
+      - name: Typecheck server
+        working-directory: server
+        run: npx tsc --noEmit
+
+      - name: Build server
+        working-directory: server
+        run: npm run build
+
+      - name: Run database migration
+        working-directory: server
+        run: npm run migrate
+
+      # --- Client: install, typecheck, build ---
+      - name: Install client dependencies
+        working-directory: client
+        run: npm ci
+
+      - name: Typecheck client
+        working-directory: client
+        run: npx tsc -b --noEmit
+
+      - name: Build client
+        working-directory: client
+        run: npm run build
+
+      # --- Start the real server, prove the sync protocol actually works ---
+      - name: Start server
+        working-directory: server
+        run: npm run dev &
+
+      - name: Wait for server
+        run: |
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:4000/health && exit 0
+            sleep 1
+          done
+          echo "server never became healthy" >&2
+          exit 1
+
+      - name: Run sync convergence test
+        working-directory: server
+        run: npm run test:sync
+
+      - name: Run viewer-enforcement test
+        working-directory: server
+        run: npm run test:viewer-enforcement
+
+      # --- Start the real client, drive it with a real browser ---
+      - name: Install Playwright Chromium
+        working-directory: client
+        run: npx playwright install --with-deps chromium
+
+      - name: Start client dev server
+        working-directory: client
+        run: npm run dev &
+
+      - name: Wait for client
+        run: |
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:5173/ && exit 0
+            sleep 1
+          done
+          echo "client never became ready" >&2
+          exit 1
+
+      - name: Run real-browser collaboration test
+        working-directory: client
+        run: npm run test:visual
