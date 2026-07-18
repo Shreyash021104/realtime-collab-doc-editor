@@ -1,0 +1,43 @@
+{
+  "name": "server",
+  "version": "1.0.0",
+  "description": "",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "migrate": "tsx src/migrate.ts",
+    "test:sync": "node scripts/sync-smoke-test.mjs",
+    "test:viewer-enforcement": "node scripts/viewer-enforcement-test.mjs"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "ioredis": "^5.11.1",
+    "jsonwebtoken": "^9.0.3",
+    "pg": "^8.22.0",
+    "uuid": "^14.0.1",
+    "ws": "^8.21.1",
+    "y-protocols": "^1.0.7",
+    "yjs": "^13.6.31"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/node": "^26.1.1",
+    "@types/pg": "^8.20.0",
+    "@types/uuid": "^10.0.0",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.23.1",
+    "typescript": "^7.0.2"
+  }
+}
