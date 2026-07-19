@@ -3,6 +3,7 @@ import type { FormEvent } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { ApiError } from "../api/client";
+import { Eye, EyeOff } from "lucide-react";
 
 export function AuthPage() {
   const [mode, setMode] = useState<"login" | "register">("login");
@@ -15,6 +16,7 @@ export function AuthPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const redirect = searchParams.get("redirect") ?? "/documents";
+  const [showPassword, setShowPassword] = useState(false);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -54,15 +56,43 @@ export function AuthPage() {
           />
         </label>
         <label>
-          Password
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            minLength={8}
-            required
-          />
-        </label>
+  Password
+  <div
+    style={{
+      position: "relative",
+      display: "flex",
+      alignItems: "center",
+    }}
+  >
+    <input
+      type={showPassword ? "text" : "password"}
+      value={password}
+      onChange={(e) => setPassword(e.target.value)}
+      minLength={8}
+      required
+      style={{
+        width: "100%",
+        paddingRight: "40px",
+      }}
+    />
+
+    <button
+      type="button"
+      onClick={() => setShowPassword(!showPassword)}
+      style={{
+        position: "absolute",
+        right: "10px",
+        border: "none",
+        background: "transparent",
+        cursor: "pointer",
+        display: "flex",
+        alignItems: "center",
+      }}
+    >
+      {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+    </button>
+  </div>
+</label>
         {error && <p className="error">{error}</p>}
         <button type="submit" disabled={loading}>
           {loading ? "Please wait…" : mode === "login" ? "Log in" : "Sign up"}
