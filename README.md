@@ -13,7 +13,9 @@ https://collab-doc-editor-server.onrender.com (backend, Render). Both on free ti
 see the caveats in [Deployment](#deployment) before judging cold-start latency.
 
 <p align="center">
-  <img src="docs/screenshots/editor-collab.png" alt="Two users editing the same document simultaneously, with a live named cursor and presence avatars" width="100%" />
+  <img src="docs/demo.gif" alt="Two users editing the same document simultaneously, with live cursors and presence avatars" width="100%" />
+  <br>
+  <em>Two browsers, one document, edits and cursors syncing live. (<a href="docs/demo.mp4">full-quality video</a>)</em>
 </p>
 
 <details>
