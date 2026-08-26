@@ -9,7 +9,8 @@
     "start": "node dist/index.js",
     "migrate": "tsx src/migrate.ts",
     "test:sync": "node scripts/sync-smoke-test.mjs",
-    "test:viewer-enforcement": "node scripts/viewer-enforcement-test.mjs"
+    "test:viewer-enforcement": "node scripts/viewer-enforcement-test.mjs",
+    "test:multi-instance": "node scripts/multi-instance-test.mjs"
   },
   "keywords": [],
   "author": "",

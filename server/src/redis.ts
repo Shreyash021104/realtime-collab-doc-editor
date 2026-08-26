@@ -33,6 +33,22 @@ export async function clearPresence(
   await redis.del(presenceKey(documentId, userId));
 }
 
+// Returns true for exactly one caller per document per interval, so that N
+// server instances holding the same document write one snapshot between them.
+export async function claimSnapshotSlot(
+  documentId: string,
+  intervalMs: number
+): Promise<boolean> {
+  const result = await redis.set(
+    `snapshot-slot:${documentId}`,
+    "1",
+    "PX",
+    intervalMs,
+    "NX"
+  );
+  return result === "OK";
+}
+
 export async function listPresence(
   documentId: string
 ): Promise<Array<{ userId: string; name: string; color: string }>> {

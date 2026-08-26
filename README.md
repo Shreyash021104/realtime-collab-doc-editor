@@ -41,36 +41,41 @@ protocol, persistence strategy, and access-control model built around it.
 ## Architecture
 
 ```
- Browser A                      Browser B
- (Tiptap + Yjs doc)             (Tiptap + Yjs doc)
-      │                               │
-      │  WebSocket (binary,           │
-      │  Yjs sync + awareness         │
-      │  protocol)                    │
-      ▼                               ▼
-            ┌─────────────────────────────┐
-            │   Node.js WS + REST server   │
-            │                               │
-            │  Room registry (per-doc):     │
-            │   - in-memory Y.Doc           │
-            │   - Awareness (cursors)       │
-            │   - connection set            │
-            └──────────────┬────────────────┘
-                            │
-        ┌───────────────────┼───────────────────┐
-        ▼                   ▼                   ▼
-   PostgreSQL           Redis                Broadcast to
-   (doc state,      (ephemeral presence:      every other
-   permissions,      who's online per doc,     connection in
-   share links,      TTL'd heartbeat keys)     the room except
-   version snapshots)                          the sender
+ Browser A                                    Browser B
+ (Tiptap + Yjs doc)                           (Tiptap + Yjs doc)
+      │                                             │
+      │  WebSocket (binary, Yjs sync + awareness)   │
+      ▼                                             ▼
+ ┌──────────────────────┐               ┌──────────────────────┐
+ │  Server instance 1   │               │  Server instance 2   │
+ │                      │               │                      │
+ │  Room registry:      │               │  Room registry:      │
+ │   - in-memory Y.Doc  │               │   - in-memory Y.Doc  │
+ │   - Awareness        │               │   - Awareness        │
+ │   - connection set   │               │   - connection set   │
+ └──────────┬───────────┘               └───────────┬──────────┘
+            │                                       │
+            │        Redis pub/sub, one channel     │
+            └───────── per document ────────────────┘
+            │       collab:doc:<id> — relays every
+            │       update / awareness change, so
+            │       both instances converge
+            │
+            ▼
+      ┌───────────────┐        ┌──────────────────────────┐
+      │     Redis     │        │        PostgreSQL        │
+      │ presence TTLs │        │ doc state, permissions,  │
+      │ relay channels│        │ share links, snapshots   │
+      └───────────────┘        └──────────────────────────┘
 ```
 
 **Request flow for a keystroke:** browser applies the edit to its local Yjs doc
 instantly (offline-first, zero-latency typing) → Yjs emits a binary update → sent
 over the WebSocket → server applies it to the room's in-memory `Y.Doc` → server
-re-broadcasts the same update to every other connection in that room → server
-debounces a write of the full document state to Postgres.
+re-broadcasts the same update to every other connection in that room, *and*
+publishes it to the document's Redis channel so any other instance holding the
+document applies and fans it out too → server debounces a write of the full
+document state to Postgres.
 
 ## Tech stack
 
@@ -84,7 +89,7 @@ debounces a write of the full document state to Postgres.
 | Auth | JWT, bcrypt password hashes |
 | Deployment | Frontend → Vercel. Backend (needs persistent WS connections, not serverless) → Render |
 
-## The four hardest decisions
+## The five hardest decisions
 
 ### 1. The server never sees "keystrokes" — it relays opaque CRDT updates
 
@@ -156,6 +161,39 @@ torn down, builds a genuinely fresh provider — never a half-destroyed one. Str
 still causes one harmless throwaway connection attempt per mount (cosmetic console
 noise, dev-only), but the app now converges correctly instead of hanging.
 
+### 5. One instance owning a document is a scaling ceiling, not a bug you can test for locally
+
+A document's `Y.Doc` lives in exactly one process's memory. On one server that's
+fine, and every local test passes — which is what makes it dangerous. Run two
+instances behind a load balancer and two people editing the same document can land
+on different ones, each happily editing a private copy, each seeing a working
+editor. Nothing errors. They just silently never see each other, and whichever
+instance flushes to Postgres last wins.
+
+The fix is a Redis pub/sub channel per document (`collab:doc:<id>`,
+`server/src/collab/relay.ts`). Every sync and awareness update an instance applies
+locally is also published; peers apply it to their own `Y.Doc` and fan it out to
+their connections. Yjs makes the merge safe — updates are commutative and
+idempotent, so ordering across instances doesn't matter.
+
+Three things this has to get right that aren't obvious from "just add pub/sub":
+
+- **Relay loops.** A relayed update, once applied, fires the same `doc.on("update")`
+  handler that publishes. Updates from a peer carry a sentinel origin, so they get
+  broadcast to local clients but never re-published.
+- **Self-delivery.** Redis delivers a publish back to the publisher. Each message is
+  tagged with a per-process instance ID and dropped on arrival if it's our own.
+- **Cold-start staleness — the subtle one.** Persistence is debounced, so when an
+  instance opens a room it reads a Postgres row that may be seconds behind a peer's
+  in-memory doc, and a relay only carries updates from that moment forward — the gap
+  in between would be lost. So a newly-loaded room publishes a state request; peers
+  reply with `Y.encodeStateAsUpdate(doc)`, which merges in as an ordinary update and
+  reaches already-connected clients through the normal broadcast path.
+
+The multi-instance test below covers all of it, including cold start. Disabling the
+relay makes it fail exactly the way production would: two clients, `"AAA"` and
+`"BBB"`, fully diverged.
+
 ## Persistence strategy
 
 Writing to Postgres on every keystroke would mean one write per character. Instead,
@@ -180,12 +218,18 @@ an existing higher role.
 
 ## What I'd change at 10x scale
 
-- **Single point of failure per document.** Each doc's `Y.Doc` lives in exactly one
-  server process's memory. Scaling to multiple server instances requires either
-  sticky sessions (route a document's connections to the same instance) or a Redis
-  pub/sub relay so every instance holding a connection for a doc receives every
-  update — the presence layer already uses Redis, so extending it to relay sync/
-  awareness messages between instances would follow the same pattern.
+- **The relay fans out to every instance holding a document, not just interested
+  ones.** That's the right trade at this size — the channel is per-document, so an
+  instance only receives traffic for documents it has subscribed to. But a state
+  request is answered by *every* peer holding the doc, so a room opening on many
+  instances at once produces N full-state replies where one would do. Electing a
+  single responder (a short Redis lock, same pattern as the snapshot slot) would fix
+  it; it isn't worth the complexity until instance counts are high.
+- **Persistence is now racier than it looks.** Every instance holding a document
+  flushes the full converged state to `documents.state`, which is safe because the
+  writes are identical and last-write-wins converges — but it is N times the write
+  volume. Snapshot rows would have multiplied the same way, so those are gated on a
+  Redis `SET NX PX` slot so exactly one instance writes each interval.
 - **No content moderation or rate limiting on updates.** A malicious editor could
   spam updates; nothing currently throttles per-connection message rate.
 - **Version history is list-only.** Snapshots are captured and listed but not
@@ -199,16 +243,21 @@ an existing higher role.
 
 ## Verifying it yourself
 
-Two server-level integration tests exercise the actual sync protocol against a
+Three server-level integration tests exercise the actual sync protocol against a
 running server — not mocks:
 
 ```bash
 cd server
 npm run test:sync                 # two clients, concurrent edits, asserts convergence
 npm run test:viewer-enforcement   # viewer bypasses the UI, asserts the server rejects it
+npm run test:multi-instance       # two real server processes, asserts they converge
 ```
 
-A third test drives two real Chromium browser sessions through the actual app —
+`test:multi-instance` spawns its own two instances (ports 4101/4102) against the same
+Postgres and Redis, so it needs no server already running — it covers both live relay
+and the cold-start state handoff described in decision #5.
+
+A fourth test drives two real Chromium browser sessions through the actual app —
 signup, create doc, generate a share link, join, type concurrently in both windows —
 and asserts the rendered editor content converges and presence avatars appear:
 
@@ -217,8 +266,8 @@ cd client
 npm run test:visual   # requires both `server` and `client` dev servers already running
 ```
 
-All three were used during development to catch real bugs (see decisions #2, #3, and
-#4 above), not written after the fact.
+All four were used during development to catch real bugs (see decisions #2 through #5
+above), not written after the fact.
 
 ## Running locally
 
