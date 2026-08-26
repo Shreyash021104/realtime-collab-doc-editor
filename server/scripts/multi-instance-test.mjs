@@ -24,13 +24,27 @@ const MESSAGE_SYNC = 0;
 const PORT_A = 4101;
 const PORT_B = 4102;
 
+// `npx tsx` is a wrapper: it spawns the real node server as a grandchild.
+// Killing the child alone leaves that grandchild running, and the stdio pipes
+// we inherited from it keep this process's event loop alive forever — the test
+// prints PASS and then hangs. `detached` puts the whole thing in its own
+// process group so it can be torn down as a unit.
 function startInstance(port) {
   const child = spawn("npx", ["tsx", "src/index.ts"], {
     env: { ...process.env, PORT: String(port) },
     stdio: ["ignore", "pipe", "pipe"],
+    detached: true,
   });
   child.stderr.on("data", (d) => process.stderr.write(`[:${port}] ${d}`));
   return child;
+}
+
+function stopInstance(child) {
+  try {
+    process.kill(-child.pid, "SIGTERM"); // negative pid = the whole group
+  } catch {
+    // already exited
+  }
 }
 
 async function waitForHealth(port, timeoutMs = 20_000) {
@@ -164,11 +178,19 @@ async function main() {
     clientB.close();
     await sleep(200);
   } finally {
-    for (const instance of instances) instance.kill("SIGTERM");
+    for (const instance of instances) stopInstance(instance);
   }
 }
 
-main().catch((err) => {
+function finish() {
+  // Belt and braces: even with the process group killed, one stray handle
+  // would hang CI for the length of the job timeout rather than failing. Give
+  // piped stdout a moment to flush, then exit for certain.
+  setTimeout(() => process.exit(process.exitCode ?? 0), 100);
+}
+
+main().then(finish, (err) => {
   console.error(err);
-  process.exit(1);
+  process.exitCode = 1;
+  finish();
 });
