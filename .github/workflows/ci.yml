@@ -100,6 +100,12 @@ jobs:
         working-directory: server
         run: npm run test:viewer-enforcement
 
+      # Spawns its own two instances on ports 4101/4102 against the same
+      # Postgres and Redis, so it is independent of the server above.
+      - name: Run multi-instance relay test
+        working-directory: server
+        run: npm run test:multi-instance
+
       # --- Start the real client, drive it with a real browser ---
       - name: Install Playwright Chromium
         working-directory: client

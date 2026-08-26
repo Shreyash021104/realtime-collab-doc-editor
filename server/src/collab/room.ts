@@ -1,9 +1,9 @@
-
 import * as Y from "yjs";
 import * as encoding from "lib0/encoding";
 import * as syncProtocol from "y-protocols/sync.js";
 import {
   Awareness,
+  applyAwarenessUpdate,
   encodeAwarenessUpdate,
   removeAwarenessStates,
 } from "y-protocols/awareness.js";
@@ -16,7 +16,21 @@ interface AwarenessChanges {
 import type { WebSocket } from "ws";
 import { query } from "../db.js";
 import { env } from "../env.js";
+import { claimSnapshotSlot } from "../redis.js";
 import { MESSAGE_AWARENESS, MESSAGE_SYNC } from "./protocol.js";
+import {
+  publishRelay,
+  subscribeRelay,
+  unsubscribeRelay,
+  RELAY_AWARENESS,
+  RELAY_ORIGIN,
+  RELAY_STATE_REQUEST,
+  RELAY_STATE_RESPONSE,
+  RELAY_UPDATE,
+  type RelayMessage,
+} from "./relay.js";
+
+const SNAPSHOT_INTERVAL_MS = 2 * 60 * 1000;
 
 export interface RoomConnection {
   ws: WebSocket;
@@ -51,6 +65,10 @@ export class Room {
       encoding.writeVarUint(encoder, MESSAGE_SYNC);
       syncProtocol.writeUpdate(encoder, update);
       this.broadcast(encoding.toUint8Array(encoder), originWs(origin));
+
+      if (origin !== RELAY_ORIGIN) {
+        void publishRelay(this.documentId, RELAY_UPDATE, update);
+      }
     });
 
     this.awareness.on(
@@ -61,15 +79,39 @@ export class Room {
           ...changes.updated,
           ...changes.removed,
         ];
+        const awarenessUpdate = encodeAwarenessUpdate(
+          this.awareness,
+          changedClients
+        );
         const encoder = encoding.createEncoder();
         encoding.writeVarUint(encoder, MESSAGE_AWARENESS);
-        encoding.writeVarUint8Array(
-          encoder,
-          encodeAwarenessUpdate(this.awareness, changedClients)
-        );
+        encoding.writeVarUint8Array(encoder, awarenessUpdate);
         this.broadcast(encoding.toUint8Array(encoder), originWs(origin));
+
+        if (origin !== RELAY_ORIGIN) {
+          void publishRelay(this.documentId, RELAY_AWARENESS, awarenessUpdate);
+        }
       }
     );
+  }
+
+  private handleRelayMessage(message: RelayMessage) {
+    switch (message.kind) {
+      case RELAY_UPDATE:
+      case RELAY_STATE_RESPONSE:
+        Y.applyUpdate(this.doc, message.payload, RELAY_ORIGIN);
+        break;
+      case RELAY_AWARENESS:
+        applyAwarenessUpdate(this.awareness, message.payload, RELAY_ORIGIN);
+        break;
+      case RELAY_STATE_REQUEST:
+        void publishRelay(
+          this.documentId,
+          RELAY_STATE_RESPONSE,
+          Y.encodeStateAsUpdate(this.doc)
+        );
+        break;
+    }
   }
 
   static async load(documentId: string): Promise<Room> {
@@ -82,7 +124,19 @@ export class Room {
     if (state) {
       Y.applyUpdate(doc, new Uint8Array(state));
     }
-    return new Room(documentId, doc);
+
+    const room = new Room(documentId, doc);
+    await subscribeRelay(documentId, (message) =>
+      room.handleRelayMessage(message)
+    );
+
+    // Writes to Postgres are debounced, so the row we just read can be behind
+    // a peer instance's in-memory doc. Ask peers for their state; any reply
+    // merges in as a normal CRDT update and reaches clients that already
+    // finished their handshake as an ordinary broadcast.
+    await publishRelay(documentId, RELAY_STATE_REQUEST, new Uint8Array());
+
+    return room;
   }
 
   // Debounced persistence: we don't write to Postgres on every keystroke.
@@ -107,9 +161,14 @@ export class Room {
     );
 
     // Keep a lightweight version history: one labelled snapshot every ~2
-    // minutes of active editing, not on every flush.
+    // minutes of active editing, not on every flush. Every instance holding
+    // the doc reaches this point, so the slot is claimed in Redis to keep the
+    // snapshot count per interval at one rather than one per instance.
     const now = Date.now();
-    if (now - this.lastSnapshotAt > 2 * 60 * 1000) {
+    if (
+      now - this.lastSnapshotAt > SNAPSHOT_INTERVAL_MS &&
+      (await claimSnapshotSlot(this.documentId, SNAPSHOT_INTERVAL_MS))
+    ) {
       this.lastSnapshotAt = now;
       await query(
         "INSERT INTO document_snapshots (document_id, state, label) VALUES ($1, $2, $3)",
@@ -159,6 +218,7 @@ export class RoomRegistry {
     const room = await roomPromise;
     if (room.connections.size === 0) {
       await room.flush();
+      await unsubscribeRelay(documentId);
       this.rooms.delete(documentId);
     }
   }
